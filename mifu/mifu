@@ -1,0 +1,269 @@
+#!/bin/bash
+
+# mifu - A friendly wrapper for ffuf. Requires full path for wordlists.
+# Includes check for ffuf installation. Seclists check removed.
+
+# --- Configuration ---
+FFUF_CMD="ffuf" # Set the path to your ffuf binary if it's not in your system's PATH
+SECLISTS_DIR="/usr/share/seclists" # Common location for Seclists (used in help text only now)
+
+# --- Helper Function: Display Short Help ---
+# Shown for basic errors when full help wasn't explicitly requested.
+display_short_help() {
+  # Updated Usage line to use 'mifu'
+  echo "Usage: mifu <URL_with_FUZZ> <full_wordlist_path> [ffuf_options...]"
+  echo "Run with '-h' or '--help' for detailed usage, examples, and wordlist suggestions."
+}
+
+# --- Helper Function: Display Full Help ---
+# Shown only when -h or --help is explicitly used.
+display_full_help() {
+  # Updated Usage line to use 'mifu'
+  echo "Usage: mifu <URL_with_FUZZ> <full_wordlist_path> [ffuf_options...]"
+  echo
+  echo "A friendly wrapper for ffuf (named mifu) to simplify fuzzing common request parts,"
+  echo "with automatic POST method detection."
+  echo
+  echo "Core Arguments:"
+  echo "  <URL_with_FUZZ>    : Target URL. MUST contain 'FUZZ' where the primary"
+  echo "                       wordlist should be inserted (path, param, subdomain)."
+  echo "  <full_wordlist_path> : The FULL, exact path to the dictionary file."
+  echo "                       The script does NOT search for wordlists automatically."
+  echo
+  echo "Common Fuzzing Scenarios & Required [ffuf_options...]:"
+  echo
+  echo "1. Fuzz URL Path / Parameter / Subdomain (Standard):"
+  echo "   Place 'FUZZ' in the desired URL location."
+  # Updated example invocation to use 'mifu'
+  echo "   Example: mifu http://example.com/FUZZ /usr/share/wordlists/dirb/common.txt -fc 404"
+  echo "   Example: mifu http://example.com/page?id=FUZZ /path/to/my/ids.txt -mc 200"
+  echo "   Example: mifu http://FUZZ.example.com /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -fc 404"
+  echo
+  echo "2. Fuzz HTTP Header Value:"
+  echo "   Use the '-H' flag. Place 'FUZZ' in the header value."
+  echo "   Example: mifu http://example.com/admin /usr/share/seclists/Fuzzing/LFI/LFI-gracefulsecurity-linux.txt -H 'X-Forwarded-For: FUZZ'"
+  echo "   Example: mifu http://example.com/api /path/to/api_tokens.txt -H 'Authorization: Bearer FUZZ'"
+  echo
+  echo "3. Fuzz POST Data:"
+  echo "   Use the '-d' flag for the data. Place 'FUZZ' in the data value."
+  echo "   The script will automatically add '-X POST' if '-d' is used and no '-X' is specified."
+  echo "   Example: mifu http://example.com/login /usr/share/wordlists/rockyou.txt -d 'user=admin&pass=FUZZ' -fc 302"
+  echo "   Example: mifu http://example.com/api/action /path/to/user_ids.txt -d '{\"id\":\"FUZZ\"}' -H 'Content-Type: application/json' -mc 200"
+  echo
+  echo "4. Fuzz HTTP Method:"
+  echo "   Use the '-X' flag with 'FUZZ'."
+  echo "   Example: mifu http://example.com/api/resource /path/to/methods.txt -X FUZZ"
+  echo "   (methods.txt might contain: GET, POST, PUT, DELETE, PATCH...)"
+  echo
+  echo "------------------------------------------------------------------"
+  echo "Wordlist Suggestions by Fuzzing Type:"
+  echo "------------------------------------------------------------------"
+  echo "NOTE: Below are *example paths* assuming wordlists are in /usr/share/wordlists/ or $SECLISTS_DIR/."
+  echo "      You must provide the FULL PATH to the actual wordlist file on your specific system."
+  echo "      Consider installing 'seclists' package for many of these examples (e.g., 'sudo apt install seclists')."
+  echo
+  echo "  * Directories / Paths:"
+  echo "    Examples:"
+  echo "      /usr/share/wordlists/dirb/common.txt"
+  echo "      $SECLISTS_DIR/Discovery/Web-Content/directory-list-2.3-medium.txt"
+  echo "      $SECLISTS_DIR/Discovery/Web-Content/raft-medium-directories-lowercase.txt"
+  echo
+  echo "  * Subdomains:"
+  echo "    Examples:"
+  echo "      $SECLISTS_DIR/Discovery/DNS/subdomains-top1million-5000.txt"
+  echo "      $SECLISTS_DIR/Discovery/DNS/dns-Jhaddix.txt"
+  echo
+  echo "  * Usernames:"
+  echo "    Examples:"
+  echo "      $SECLISTS_DIR/Usernames/top-usernames-shortlist.txt"
+  echo "      $SECLISTS_DIR/Usernames/Names/names.txt"
+  echo "      /usr/share/wordlists/metasploit/unix_users.txt"
+  echo
+  echo "  * Passwords:"
+  echo "    Examples:"
+  echo "      /usr/share/wordlists/rockyou.txt"
+  echo "      /usr/share/wordlists/fasttrack.txt"
+  echo "      $SECLISTS_DIR/Passwords/Common-Credentials/10-million-password-list-top-10000.txt"
+  echo "    (Note: rockyou.txt often needs decompression: sudo gzip -d /usr/share/wordlists/rockyou.txt.gz)"
+  echo
+  echo "  * Parameters (e.g., ?id=FUZZ):"
+  echo "    Examples:"
+  echo "      $SECLISTS_DIR/Discovery/Web-Content/burp-parameter-names.txt"
+  echo "      $SECLISTS_DIR/Discovery/Web-Content/common-api-endpoints-and-params.txt"
+  echo
+  echo "  * File Inclusion / Path Traversal (LFI):"
+  echo "    Examples:"
+  echo "      $SECLISTS_DIR/Fuzzing/LFI/LFI-common-files.txt"
+  echo "      $SECLISTS_DIR/Fuzzing/LFI/LFI-gracefulsecurity-linux.txt"
+  echo
+  echo "  * General Fuzzing / Vulnerabilities (XSS, SQLi, SSTI, etc.):"
+  echo "    Examples:"
+  echo "      $SECLISTS_DIR/Fuzzing/special-chars.txt"
+  echo "      $SECLISTS_DIR/Fuzzing/SQLi/Generic-SQLi.txt"
+  echo "      $SECLISTS_DIR/Fuzzing/XSS/XSS-Jhaddix.txt"
+  echo "      $SECLISTS_DIR/Fuzzing/template-engines-ssti.txt"
+  echo
+  echo "** Always choose a wordlist suitable for the target technology and fuzzing goal! **"
+  echo "------------------------------------------------------------------"
+  echo
+  echo "Other Useful ffuf Options (pass directly):"
+  echo "  -fc <codes>   Filter status codes (e.g., 404, 301, 302)"
+  echo "  -fs <size>    Filter response size"
+  echo "  -mc <codes>   Match status codes (e.g., 200, 301)"
+  echo "  -ms <size>    Match response size"
+  echo "  -t <threads>  Number of concurrent threads (default: 40)"
+  echo "  -recursion    Enable recursive fuzzing"
+  echo "  -o <file>     Save output to file"
+  echo "  -of <format>  Output format (json, csv, html, etc.)"
+  echo "  -h, --help    Show this detailed help message."
+  echo
+  echo "Full ffuf documentation: $FFUF_CMD -h"
+  echo
+}
+
+# --- Check for Explicit Help Request ANYWHERE in arguments ---
+SHOW_FULL_HELP=false
+for arg in "$@"; do
+    if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+        SHOW_FULL_HELP=true
+        break
+    fi
+done
+
+# --- Handle Explicit Help Request ---
+if [[ "$SHOW_FULL_HELP" == true ]]; then
+    display_full_help
+    if [[ $# -eq 1 && ( "$1" == "-h" || "$1" == "--help" ) ]]; then
+        exit 0
+    fi
+    # Continue if -h was passed with other args
+fi
+
+# --- Prerequisite Checks (FFUF Only) ---
+# Perform these checks only if not just displaying help and exiting immediately
+if ! [[ $# -eq 1 && ( "$1" == "-h" || "$1" == "--help" ) ]]; then
+    # Check 1: Verify ffuf command exists and is executable
+    if ! command -v "$FFUF_CMD" &> /dev/null; then
+        echo "Error: '$FFUF_CMD' command not found or not executable." >&2
+        echo "Please install ffuf to use this script (mifu)." >&2
+        echo "Example installation (Debian/Ubuntu): sudo apt update && sudo apt install ffuf" >&2
+        exit 127 # Command not found exit code
+    fi
+
+    # Check 2: Seclists check and warning removed as requested.
+fi
+
+# --- Initial Argument Check (Minimum Args) ---
+# Check only if full help wasn't already requested and handled
+if [[ "$SHOW_FULL_HELP" == false && $# -lt 2 ]]; then
+  echo "Error: Missing required arguments." >&2
+  display_short_help >&2
+  exit 1
+fi
+
+# --- Assign Core Arguments ---
+TARGET_URL=$1
+WORDLIST_ARG=$2 # The exact path provided by the user
+
+# --- Check Wordlist Path (Simplified) ---
+WORDLIST_PATH="" # Final path to use
+FOUND_WORDLIST=false
+
+# Check if the provided argument is a regular file and is readable
+if [ -f "$WORDLIST_ARG" ] && [ -r "$WORDLIST_ARG" ]; then
+    WORDLIST_PATH="$WORDLIST_ARG"
+    FOUND_WORDLIST=true
+fi
+
+# --- Shift arguments *after* processing wordlist ---
+FFUF_OPTIONS=()
+if [ $# -ge 2 ]; then
+    shift 2
+    FFUF_OPTIONS=("$@")
+fi
+
+# --- Validate Wordlist (Simplified) ---
+# Skip validation if full help was requested
+if [[ "$SHOW_FULL_HELP" == false && "$FOUND_WORDLIST" == false ]]; then
+    echo "Error: Wordlist '$WORDLIST_ARG' not found or not readable." >&2
+    echo "       Please provide the full, correct path to an existing, readable wordlist file." >&2
+    display_short_help >&2
+    exit 1
+elif [[ "$FOUND_WORDLIST" == false && "$SHOW_FULL_HELP" == true ]]; then
+     # Use placeholder if help requested but wordlist arg was bad/missing
+     WORDLIST_PATH="/dev/null"
+fi
+
+
+# --- Validate URL FUZZ keyword ---
+# Skip validation if full help was requested
+FUZZ_MISSING_ERROR=false
+if [[ "$TARGET_URL" != *"FUZZ"* ]]; then
+    # Check if it's okay because we're fuzzing method/header
+    IS_METHOD_FUZZ=false; HAS_HEADER_FUZZ=false
+    i=0
+    while [ $i -lt ${#FFUF_OPTIONS[@]} ]; do
+        arg="${FFUF_OPTIONS[$i]}"; next_arg_idx=$((i + 1)); next_arg="";
+        if [ $next_arg_idx -lt ${#FFUF_OPTIONS[@]} ]; then next_arg="${FFUF_OPTIONS[$next_arg_idx]}"; fi
+        if [[ "$arg" == "-X" || "$arg" == "--request-method" ]] && [[ "$next_arg" == "FUZZ" ]]; then IS_METHOD_FUZZ=true; fi
+        if [[ "$arg" == --request-method=FUZZ* || "$arg" == -XFUZZ* ]]; then IS_METHOD_FUZZ=true; fi
+        if [[ "$arg" == "-H" || "$arg" == "--header" ]] && [[ "$next_arg" == *"FUZZ"* ]]; then HAS_HEADER_FUZZ=true; fi
+        if [[ "$arg" == --header=*FUZZ* ]]; then HAS_HEADER_FUZZ=true; fi
+        ((i++))
+    done
+    if [[ "$IS_METHOD_FUZZ" == false && "$HAS_HEADER_FUZZ" == false ]]; then
+         FUZZ_MISSING_ERROR=true
+    fi
+fi
+
+# Trigger error only if check failed and help wasn't explicitly requested
+if [[ "$SHOW_FULL_HELP" == false && "$FUZZ_MISSING_ERROR" == true ]]; then
+    echo "Error: The target URL must contain the 'FUZZ' keyword unless fuzzing method (-X FUZZ) or header (-H '...FUZZ...')." >&2
+    echo "Provided URL: $TARGET_URL" >&2
+    display_short_help >&2
+    exit 1
+fi
+
+# --- Add Intelligence: Auto add '-X POST' if '-d' is present without '-X' ---
+needs_post_method=false
+# Only perform this check if not explicitly showing full help
+if [[ "$SHOW_FULL_HELP" == false ]]; then
+    has_explicit_method=false; has_data=false
+    i=0
+    while [ $i -lt ${#FFUF_OPTIONS[@]} ]; do
+        arg="${FFUF_OPTIONS[$i]}"
+        if [[ "$arg" == "-d" || "$arg" == "--data" || "$arg" == --data=* || "$arg" == -d?* ]]; then has_data=true; fi
+        if [[ "$arg" == "-X" || "$arg" == "--request-method" || "$arg" == --request-method=* || "$arg" == -X?* ]]; then has_explicit_method=true; fi
+        ((i++))
+    done
+    if [[ "$has_data" == true && "$has_explicit_method" == false ]]; then
+        needs_post_method=true
+    fi
+fi
+
+# --- Construct the ffuf Command Array ---
+COMMAND=( "$FFUF_CMD" -u "$TARGET_URL" -w "$WORDLIST_PATH" )
+if [[ "$needs_post_method" == true ]]; then
+    COMMAND+=( "-X" "POST" )
+fi
+COMMAND+=( "${FFUF_OPTIONS[@]}" )
+
+# --- Execute the Command ---
+# Display info/command only if not explicitly asking for help
+if [[ "$SHOW_FULL_HELP" == false ]]; then
+    echo "------------------------------------------------------------------"
+    if [[ "$needs_post_method" == true ]]; then
+         echo "[INFO] Automatically adding '-X POST' due to '-d'/'--data' without '-X'."
+    fi
+    # FFUF existence already checked earlier
+    echo " Running ffuf with the following command:"
+    printf "  %q" "${COMMAND[@]}" # Safely prints the command arguments
+    echo
+    echo "------------------------------------------------------------------"
+fi
+
+# Execute the constructed command.
+"${COMMAND[@]}"
+
+# --- Exit ---
+exit $?
